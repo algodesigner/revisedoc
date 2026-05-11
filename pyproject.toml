@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = [{ name = "Vlad Shurupov" }]
 description = "Edit .docx files with tracked changes, comments, and revision restoration — for humans and AI agents"
 readme = "README.md"
-license = { text = "BSD-3-Clause" }
+license = "BSD-3-Clause"
 requires-python = ">=3.10"
 dependencies = [
     "python-docx>=1.1.0",
