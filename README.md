@@ -32,18 +32,23 @@ with the same care a human reviewer would.
 ## Installation
 
 ```bash
-pip install revisedoc
+pip install revisedoc          # with pip
+pipx install revisedoc          # with pipx (isolated)
 ```
 
 For AI agent integration (opencode, Claude Code):
 
 ```bash
-pip install "revisedoc[mcp]"
+pip install "revisedoc[mcp]"     # pip — quotes required in zsh
+pipx install "revisedoc[mcp]"    # pipx — quotes required in zsh
 ```
 
 > `[mcp]` is an optional extra — it installs the same `revisedoc` package plus the
 > `mcp` SDK dependency. Without it, the CLI and Python API work fine; only the
 > `revisedoc-mcp` server is unavailable.
+>
+> **Note for zsh users:** the square brackets must be quoted. Use
+> `pip install "revisedoc[mcp]"` not `pip install revisedoc[mcp]`.
 
 ## CLI Usage
 
