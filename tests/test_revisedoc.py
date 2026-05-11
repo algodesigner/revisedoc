@@ -15,9 +15,11 @@ from revisedoc.editor import (
     add_comment,
     finalize_comments,
     get_full_text,
+    inspect_document,
     list_revisions,
     replace_text,
     restore_revision,
+    search_text,
 )
 from tests.conftest import _ns as _test_ns, read_xml
 
@@ -312,6 +314,78 @@ def test_get_full_text_after_replace(revised_doc):
     assert "foo" not in text  # deletion excluded
 
 
+# ─── Core: inspect_document ──────────────────────────────────────────────────
+
+
+def test_inspect_document_all(simple_doc):
+    doc = Document(str(simple_doc))
+    info = inspect_document(doc)
+    assert len(info) == 2  # two paragraphs
+    assert info[0]["index"] == 0
+    assert info[1]["index"] == 1
+    assert "Hello world foo bar" in info[0]["text"]
+    assert info[0]["revisions"]["insertions"] == 0
+    assert info[0]["revisions"]["deletions"] == 0
+
+
+def test_inspect_document_single(simple_doc):
+    doc = Document(str(simple_doc))
+    info = inspect_document(doc, paragraph_index=0)
+    assert len(info) == 1
+    assert info[0]["index"] == 0
+
+
+def test_inspect_document_runs(formatted_doc):
+    doc = Document(str(formatted_doc))
+    info = inspect_document(doc, paragraph_index=0)
+    assert len(info[0]["runs"]) == 3
+    # Second run should be bold
+    assert info[0]["runs"][1]["formatting"]["bold"] is True
+    # First and third runs should not be bold
+    assert info[0]["runs"][0]["formatting"]["bold"] is False
+    assert info[0]["runs"][2]["formatting"]["bold"] is False
+
+
+def test_inspect_document_revisions(revised_doc):
+    doc = Document(str(revised_doc))
+    info = inspect_document(doc)
+    total_ins = sum(p["revisions"]["insertions"] for p in info)
+    total_del = sum(p["revisions"]["deletions"] for p in info)
+    assert total_ins >= 1
+    assert total_del >= 1
+
+
+# ─── Core: search_text ───────────────────────────────────────────────────────
+
+
+def test_search_text_found(simple_doc):
+    doc = Document(str(simple_doc))
+    results = search_text(doc, "foo")
+    assert len(results) >= 1
+    assert results[0]["paragraph_index"] == 0
+    assert results[0]["match_start"] >= 0
+
+
+def test_search_text_multiple(simple_doc):
+    doc = Document(str(simple_doc))
+    results = search_text(doc, "foo")
+    assert len(results) == 3  # appears 3 times across paragraphs
+
+
+def test_search_text_not_found(simple_doc):
+    doc = Document(str(simple_doc))
+    results = search_text(doc, "zzz")
+    assert results == []
+
+
+def test_search_text_offsets(simple_doc):
+    doc = Document(str(simple_doc))
+    results = search_text(doc, "Hello")
+    assert len(results) == 1
+    assert results[0]["match_start"] == 0
+    assert results[0]["match_end"] == 5
+
+
 # ─── CLI integration tests ────────────────────────────────────────────────
 
 
@@ -435,7 +509,7 @@ def test_mcp_server_lists_tools(simple_doc):
         tools = {t["name"] for t in result["result"]["tools"]}
         assert tools == {
             "docx_replace", "docx_comment", "docx_list_revisions",
-            "docx_restore", "docx_get_text",
+            "docx_restore", "docx_get_text", "docx_inspect", "docx_search",
         }
     finally:
         proc.kill()
@@ -658,6 +732,74 @@ def test_mcp_server_call_comment(simple_doc, tmp_path):
         # Verify comments.xml was injected
         with zipfile.ZipFile(str(out)) as z:
             assert "word/comments.xml" in z.namelist()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_mcp_server_call_inspect(simple_doc):
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_inspect",
+                "arguments": {"input_path": str(simple_doc)},
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        content = result["result"]["content"]
+        text = "".join(c["text"] for c in content if c["type"] == "text")
+        data = json.loads(text)
+        assert len(data) == 2
+        assert data[0]["index"] == 0
+        assert "Hello" in data[0]["text"]
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_mcp_server_call_search(simple_doc):
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_search",
+                "arguments": {
+                    "input_path": str(simple_doc),
+                    "query": "foo",
+                },
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        content = result["result"]["content"]
+        text = "".join(c["text"] for c in content if c["type"] == "text")
+        data = json.loads(text)
+        assert len(data) >= 1
+        assert data[0]["paragraph_index"] == 0
     finally:
         proc.kill()
         proc.wait()

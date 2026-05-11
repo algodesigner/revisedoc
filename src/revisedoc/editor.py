@@ -429,3 +429,75 @@ def get_full_text(doc):
     for p in body.iterchildren(_ns("p")):
         paras.append(_get_effective_text(p))
     return "\n".join(paras)
+
+
+def inspect_document(doc, paragraph_index=None):
+    body = _find_body(doc)
+    results = []
+    for idx, p in enumerate(body.iterchildren(_ns("p"))):
+        if paragraph_index is not None and idx != paragraph_index:
+            continue
+
+        runs_info = []
+        for r in p.iterchildren(_ns("r")):
+            rpr = r.find(_ns("rPr"))
+            fmt = {"bold": False, "italic": False, "underline": False}
+            if rpr is not None:
+                fmt["bold"] = rpr.find(_ns("b")) is not None
+                fmt["italic"] = rpr.find(_ns("i")) is not None
+                fmt["underline"] = rpr.find(_ns("u")) is not None
+            runs_info.append({
+                "text": _run_text(r),
+                "formatting": fmt,
+            })
+
+        results.append({
+            "index": idx,
+            "para_id": p.get(_ns("paraId"), ""),
+            "text": _get_effective_text(p),
+            "runs": runs_info,
+            "revisions": {
+                "insertions": len(list(p.iterchildren(_ns("ins")))),
+                "deletions": len(list(p.iterchildren(_ns("del")))),
+            },
+        })
+
+    return results
+
+
+def search_text(doc, query):
+    body = _find_body(doc)
+    matches = []
+    for p_idx, p in enumerate(body.iterchildren(_ns("p"))):
+        para_text = ""
+        run_map = []
+        for r in p.iterchildren(_ns("r")):
+            t = r.find(_ns("t"))
+            if t is not None and t.text:
+                start = len(para_text)
+                para_text += t.text
+                run_map.append((r, start, len(para_text)))
+
+        pos = 0
+        while True:
+            m = para_text.find(query, pos)
+            if m == -1:
+                break
+            end = m + len(query)
+            matched_runs = []
+            for r, rs, re in run_map:
+                if rs < end and re > m:
+                    matched_runs.append({
+                        "text": _run_text(r),
+                        "run_offset": max(0, m - rs),
+                    })
+            matches.append({
+                "paragraph_index": p_idx,
+                "paragraph_text": para_text,
+                "match_start": m,
+                "match_end": end,
+                "matched_runs": matched_runs,
+            })
+            pos = end if end > pos else pos + 1
+
+    return matches

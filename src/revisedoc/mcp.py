@@ -11,9 +11,11 @@ from revisedoc.editor import (
     add_comment,
     finalize_comments,
     get_full_text,
+    inspect_document,
     list_revisions,
     replace_text,
     restore_revision,
+    search_text,
 )
 
 server = FastMCP("revisedoc")
@@ -83,12 +85,34 @@ def docx_restore(
     return f"Restored revision {revision_id} -> {output_path}"
 
 
-@server.tool(description="""Extract the plain text of a .docx file with insertions applied and deletions excluded. This reflects what the document would look like if all tracked changes were accepted. Use this to inspect document content before deciding what to edit, or to get a clean text version for comparison.""")
+@server.tool(description="""Extract the plain text of a .docx file with insertions applied and deletions excluded. Returns paragraphs joined by newlines with no paragraph indices or formatting info. For structured output with paragraph indices and per-run formatting, use docx_inspect instead.""")
 def docx_get_text(
     input_path: str,
 ) -> str:
     doc = Document(input_path)
     return get_full_text(doc)
+
+
+@server.tool(description="""Inspect the structure of a .docx file. Returns every paragraph with its index, paraId, effective text, run-level formatting (bold/italic/underline), and revision counts. Optionally pass a paragraph_index to inspect a single paragraph in detail. Use this BEFORE editing to understand the document structure and formatting.""")
+def docx_inspect(
+    input_path: str,
+    paragraph_index: int | None = None,
+) -> str:
+    import json
+    doc = Document(input_path)
+    info = inspect_document(doc, paragraph_index=paragraph_index)
+    return json.dumps(info, indent=2)
+
+
+@server.tool(description="""Search for exact text in a .docx file. Returns all occurrences with the paragraph index, character offsets (match_start, match_end) within the paragraph, and which runs the match spans. Use this BEFORE docx_replace to verify the text exists and understand its exact location in the document structure. Returns an empty list if no matches are found.""")
+def docx_search(
+    input_path: str,
+    query: str,
+) -> str:
+    import json
+    doc = Document(input_path)
+    results = search_text(doc, query)
+    return json.dumps(results, indent=2)
 
 
 def main():
