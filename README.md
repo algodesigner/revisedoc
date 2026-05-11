@@ -29,6 +29,21 @@ with the same care a human reviewer would.
 - **Batch processing** — Script document updates across hundreds of files
   using the Python API, with every change recorded in Word's revision log.
 
+## Quick Start
+
+Create a document, then use the MCP tools from your AI agent:
+
+```
+1. docx_inspect     — see the paragraph structure and formatting
+2. docx_search      — locate exact text before editing
+3. docx_replace     — make tracked changes (strikethrough + underline)
+4. docx_comment     — annotate clauses with inline comments
+5. docx_list_revisions — review what changed
+```
+
+Every operation produces standard Word revision markup — open the output in
+Word to see tracked changes, or accept/reject them as usual.
+
 ## Installation
 
 ```bash
