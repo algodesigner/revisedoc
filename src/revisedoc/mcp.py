@@ -4,12 +4,8 @@ MCP server providing revisedoc operations as structured tools.
 Start with:  revisedoc-mcp
 """
 
-import asyncio
-import json
-
 from docx import Document
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
+from mcp.server.fastmcp import FastMCP
 
 from revisedoc.editor import (
     add_comment,
@@ -20,11 +16,11 @@ from revisedoc.editor import (
     restore_revision,
 )
 
-server = Server("revisedoc")
+server = FastMCP("revisedoc")
 
 
-@server.tool(description="Replace all occurrences of old_text with new_text using tracked changes")
-async def docx_replace(
+@server.tool(description="""Replace text in a .docx file with Word-compatible tracked changes. The old text is wrapped in <w:del> (strikethrough) and the new text in <w:ins> (underline), exactly as if a human used Word's "Track Changes" feature. All occurrences are replaced. Use this when you need to update a contract, proposal, or any document while preserving a visible edit history.""")
+def docx_replace(
     input_path: str,
     output_path: str,
     old_text: str,
@@ -37,8 +33,8 @@ async def docx_replace(
     return f"Replaced {old_text!r} with {new_text!r} -> {output_path}"
 
 
-@server.tool(description="Add a comment anchored to a specific text range in the document")
-async def docx_comment(
+@server.tool(description="""Add an inline comment anchored to a specific text range in a .docx file. The comment appears in Word's comment pane and the annotated text gets highlighted. Use this for document review workflows — flagging sections for revision, asking questions, or leaving notes for collaborators.""")
+def docx_comment(
     input_path: str,
     output_path: str,
     target_text: str,
@@ -53,11 +49,12 @@ async def docx_comment(
     return f"Added comment on {target_text!r} -> {output_path}"
 
 
-@server.tool(description="List all tracked changes (insertions and deletions) in a document")
-async def docx_list_revisions(
+@server.tool(description="""List all tracked changes (insertions and deletions) in a .docx file. Returns each revision's ID, type, author, date, and text content. Use this BEFORE restoring a revision to discover the revision IDs, or to inspect what changes a document contains. The "json" format is best for programmatic use.""")
+def docx_list_revisions(
     input_path: str,
     format: str = "text",
 ) -> str:
+    import json
     doc = Document(input_path)
     revs = list_revisions(doc)
     if format == "json":
@@ -73,8 +70,8 @@ async def docx_list_revisions(
     return "\n".join(lines)
 
 
-@server.tool(description="Undo a specific revision by its ID")
-async def docx_restore(
+@server.tool(description="""Undo a specific tracked change in a .docx file by its revision ID. Use docx_list_revisions first to discover IDs. With restore_type="deletion" (default), the deleted text is moved back and the paired insertion is removed — restoring the original text. With restore_type="insertion", both the insertion and its paired deletion are removed, effectively discarding the edit.""")
+def docx_restore(
     input_path: str,
     output_path: str,
     revision_id: str,
@@ -86,8 +83,8 @@ async def docx_restore(
     return f"Restored revision {revision_id} -> {output_path}"
 
 
-@server.tool(description="Print the document plain text (insertions applied, deletions excluded)")
-async def docx_get_text(
+@server.tool(description="""Extract the plain text of a .docx file with insertions applied and deletions excluded. This reflects what the document would look like if all tracked changes were accepted. Use this to inspect document content before deciding what to edit, or to get a clean text version for comparison.""")
+def docx_get_text(
     input_path: str,
 ) -> str:
     doc = Document(input_path)
@@ -95,12 +92,7 @@ async def docx_get_text(
 
 
 def main():
-    asyncio.run(_run())
-
-
-async def _run():
-    async with stdio_server() as (read, write):
-        await server.run(read, write)
+    server.run_stdio_async()
 
 
 if __name__ == "__main__":

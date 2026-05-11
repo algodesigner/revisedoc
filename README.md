@@ -1,6 +1,10 @@
 # revisedoc
 
-Edit `.docx` files with tracked changes, comments, and revision restoration — for humans and AI agents.
+Edit `.docx` files the way Word intended — with full change tracking, inline
+comments, and revision history. No more sending around unmarked copies or
+losing track of what changed. Use it from the command line, from your Python
+code, or hook it up as an MCP server so your AI coding agent can edit documents
+with the same care a human reviewer would.
 
 ## Features
 
@@ -10,17 +14,36 @@ Edit `.docx` files with tracked changes, comments, and revision restoration — 
 - **Revision restoration** — Undo a specific tracked change
 - **MCP server** — Expose all operations as structured tools for AI agents (opencode, Claude Code, etc.)
 
+## Use Cases
+
+- **Contract redlining** — Replace outdated terms in a `.docx` contract with
+  tracked changes so the other side sees exactly what was modified.
+
+- **Document review workflows** — Annotate drafts with inline comments,
+  then list and restore revisions to review changes systematically.
+
+- **AI-assisted editing** — Connect the MCP server to opencode or Claude Code
+  and have your agent propose edits with full change tracking — no more
+  "just trust me, I made some changes."
+
+- **Batch processing** — Script document updates across hundreds of files
+  using the Python API, with every change recorded in Word's revision log.
+
 ## Installation
 
 ```bash
 pip install revisedoc
 ```
 
-For MCP support:
+For AI agent integration (opencode, Claude Code):
 
 ```bash
 pip install "revisedoc[mcp]"
 ```
+
+> `[mcp]` is an optional extra — it installs the same `revisedoc` package plus the
+> `mcp` SDK dependency. Without it, the CLI and Python API work fine; only the
+> `revisedoc-mcp` server is unavailable.
 
 ## CLI Usage
 
