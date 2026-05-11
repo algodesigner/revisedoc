@@ -373,7 +373,6 @@ def test_cli_comment(simple_doc, tmp_path):
 
 
 def test_cli_restore(revised_doc, tmp_path):
-    # Get the revision id first
     doc = Document(str(revised_doc))
     revs = list_revisions(doc)
     del_id = revs[0]["id"]
@@ -389,3 +388,278 @@ def test_cli_restore(revised_doc, tmp_path):
     doc2 = Document(str(out))
     text = get_full_text(doc2)
     assert "foo" in text  # deletion reverted
+
+
+# ─── MCP server tests ──────────────────────────────────────────────────────
+
+
+def _mcp_init(proc):
+    """Send initialize request and return server capabilities."""
+    req = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0.1.0"},
+        },
+    })
+    proc.stdin.write(req.encode() + b"\n")
+    proc.stdin.flush()
+    line = proc.stdout.readline()
+    resp = json.loads(line)
+    assert resp["id"] == 1
+    assert "result" in resp
+
+    notif = json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    proc.stdin.write(notif.encode() + b"\n")
+    proc.stdin.flush()
+    return resp["result"]
+
+
+def test_mcp_server_lists_tools(simple_doc):
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        tools = {t["name"] for t in result["result"]["tools"]}
+        assert tools == {
+            "docx_replace", "docx_comment", "docx_list_revisions",
+            "docx_restore", "docx_get_text",
+        }
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_mcp_server_call_get_text(simple_doc):
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_get_text",
+                "arguments": {"input_path": str(simple_doc)},
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        content = result["result"]["content"]
+        text = "".join(c["text"] for c in content if c["type"] == "text")
+        assert "Hello world foo bar" in text
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_mcp_server_call_replace(simple_doc, tmp_path):
+    out = tmp_path / "out.docx"
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_replace",
+                "arguments": {
+                    "input_path": str(simple_doc),
+                    "output_path": str(out),
+                    "old_text": "foo",
+                    "new_text": "bar",
+                    "author": "Test",
+                },
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        assert "result" in result
+        assert out.exists()
+
+        # Verify the output file has the replacement
+        doc = Document(str(out))
+        text = get_full_text(doc)
+        assert "bar" in text
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_mcp_server_call_list_revisions(revised_doc):
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_list_revisions",
+                "arguments": {"input_path": str(revised_doc)},
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        content = result["result"]["content"]
+        text = "".join(c["text"] for c in content if c["type"] == "text")
+        assert "insertion" in text
+        assert "deletion" in text
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_mcp_server_call_restore(revised_doc, tmp_path):
+    out = tmp_path / "restored.docx"
+
+    # Get revision ID first via docx_list_revisions
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_list_revisions",
+                "arguments": {"input_path": str(revised_doc)},
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        content = result["result"]["content"]
+        text = "".join(c["text"] for c in content if c["type"] == "text")
+        proc.kill()
+        proc.wait()
+    except Exception:
+        proc.kill()
+        proc.wait()
+        raise
+
+    # Parse revision ID from text output
+    del_id = None
+    for line_text in text.split("\n"):
+        if "ID:" in line_text and "deletion" in line_text:
+            del_id = line_text.split("ID: ")[1].split(" ")[0]
+            break
+    assert del_id is not None
+
+    # Now restore via docx_restore
+    proc2 = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc2)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_restore",
+                "arguments": {
+                    "input_path": str(revised_doc),
+                    "output_path": str(out),
+                    "revision_id": del_id,
+                },
+            },
+        })
+        proc2.stdin.write(req.encode() + b"\n")
+        proc2.stdin.flush()
+
+        line = proc2.stdout.readline()
+        result = json.loads(line)
+        assert "result" in result
+        assert out.exists()
+
+        doc = Document(str(out))
+        text = get_full_text(doc)
+        assert "foo" in text  # deletion reverted
+    finally:
+        proc2.kill()
+        proc2.wait()
+
+
+def test_mcp_server_call_comment(simple_doc, tmp_path):
+    out = tmp_path / "out.docx"
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_comment",
+                "arguments": {
+                    "input_path": str(simple_doc),
+                    "output_path": str(out),
+                    "target_text": "Hello",
+                    "comment": "A greeting",
+                    "author": "Tester",
+                },
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        assert "result" in result
+        assert out.exists()
+
+        # Verify comments.xml was injected
+        with zipfile.ZipFile(str(out)) as z:
+            assert "word/comments.xml" in z.namelist()
+    finally:
+        proc.kill()
+        proc.wait()
+
+

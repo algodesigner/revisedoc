@@ -92,7 +92,7 @@ def docx_get_text(
 
 
 def main():
-    server.run_stdio_async()
+    server.run(transport="stdio")
 
 
 if __name__ == "__main__":
