@@ -72,7 +72,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   github-release:
-    needs: publish
+    needs: [publish, guard]
     runs-on: ubuntu-latest
     permissions:
       contents: write
