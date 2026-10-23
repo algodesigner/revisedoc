@@ -5,7 +5,11 @@ Start with:  revisedoc-mcp
 """
 
 from docx import Document
-from mcp.server.fastmcp import FastMCP
+
+try:  # mcp >= 2 renamed FastMCP to MCPServer
+    from mcp.server.mcpserver import MCPServer as _Server
+except ImportError:  # mcp < 2
+    from mcp.server.fastmcp import FastMCP as _Server
 
 from revisedoc.editor import (
     add_comment,
@@ -18,7 +22,7 @@ from revisedoc.editor import (
     search_text,
 )
 
-server = FastMCP("revisedoc")
+server = _Server("revisedoc")
 
 
 @server.tool(description="""Replace text in a .docx file with Word-compatible tracked changes. The old text is wrapped in <w:del> (strikethrough) and the new text in <w:ins> (underline), exactly as if a human used Word's "Track Changes" feature. All occurrences are replaced. Use this when you need to update a contract, proposal, or any document while preserving a visible edit history.""")
