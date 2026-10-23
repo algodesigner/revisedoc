@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from lxml import etree
 from docx import Document
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -412,15 +413,53 @@ def restore_revision(doc, revision_id, restore_type="deletion"):
     return doc
 
 
+def _paragraph_text_and_markers(p_elem):
+    """Return a paragraph's effective text plus its comment range markers.
+
+    The text model matches the rest of the tool: direct ``w:r`` runs and runs
+    inside ``w:ins`` contribute text, while ``w:del`` (deleted text) and every
+    other child contribute none. Markers are returned as
+    ``(kind, comment_id, offset)`` tuples where ``kind`` is ``"start"`` or
+    ``"end"`` and ``offset`` is the character offset within the paragraph text
+    at which the marker sits.
+
+    Comment markers can be nested inside ``w:ins``/``w:del`` (for example a
+    comment anchored to a tracked insertion), so those containers are walked
+    rather than skipped.
+    """
+    text_parts = []
+    markers = []
+    length = 0
+
+    def _walk(children, in_del, depth):
+        nonlocal length
+        for child in children:
+            tag = child.tag
+            if tag == _ns("r"):
+                # Only runs at the paragraph level (depth 0) or directly inside
+                # a top-level w:ins (depth 1) contribute text, matching the
+                # rest of the tool; deleted text never does. Markers are still
+                # detected at any depth.
+                if not in_del and depth <= 1:
+                    piece = _run_text(child)
+                    if piece:
+                        text_parts.append(piece)
+                        length += len(piece)
+            elif tag == _ns("ins"):
+                _walk(child.iterchildren(), in_del, depth + 1)
+            elif tag == _ns("del"):
+                _walk(child.iterchildren(), True, depth + 1)
+            elif tag == _ns("commentRangeStart"):
+                markers.append(("start", child.get(_ns("id")), length))
+            elif tag == _ns("commentRangeEnd"):
+                markers.append(("end", child.get(_ns("id")), length))
+
+    _walk(p_elem.iterchildren(), False, 0)
+    return "".join(text_parts), markers
+
+
 def _get_effective_text(p_elem):
-    parts = []
-    for child in p_elem.iterchildren():
-        if child.tag == _ns("r"):
-            parts.append(_run_text(child))
-        elif child.tag == _ns("ins"):
-            for r in child.iterchildren(_ns("r")):
-                parts.append(_run_text(r))
-    return "".join(parts)
+    return _paragraph_text_and_markers(p_elem)[0]
 
 
 def get_full_text(doc):
@@ -431,8 +470,111 @@ def get_full_text(doc):
     return "\n".join(paras)
 
 
+def _comment_metadata(doc):
+    """Map comment id -> ``{author, date, content}`` from the comments part.
+
+    Uses python-docx's comments API, but only after confirming the comments
+    part already exists: reading ``doc.comments`` on a document without one
+    would create and relate an empty part as a side effect, mutating a document
+    that inspection should leave untouched. Returns an empty mapping when there
+    is no comments part (or when it cannot be read), so anchoring still works
+    for documents without comment metadata.
+    """
+    metadata = {}
+    try:
+        doc.part.part_related_by(RT.COMMENTS)
+    except KeyError:
+        return metadata
+
+    try:
+        for comment in doc.comments:
+            timestamp = comment.timestamp
+            if timestamp is None:
+                date = ""
+            elif timestamp.tzinfo is not None:
+                date = timestamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            else:
+                date = timestamp.strftime("%Y-%m-%dT%H:%M:%S")
+            metadata[int(comment.comment_id)] = {
+                "author": comment.author or "",
+                "date": date,
+                "content": comment.text,
+            }
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return metadata
+    return metadata
+
+
+def _collect_paragraph_comments(body, metadata):
+    """Map paragraph index -> list of comment annotations.
+
+    Comment ranges are matched with a dict keyed by comment id rather than a
+    stack, so overlapping (non-nested) ranges resolve correctly. A range that
+    starts in one paragraph and ends in a later one is attached to the
+    paragraph where it starts, with ``spans_paragraphs`` set to True. Orphaned
+    markers and comments without a range are ignored rather than raising.
+    """
+    by_para = {}
+    open_ranges = {}
+    para_texts = []
+
+    for p_idx, p in enumerate(body.iterchildren(_ns("p"))):
+        text, markers = _paragraph_text_and_markers(p)
+        para_texts.append(text)
+
+        for kind, raw_id, offset in markers:
+            try:
+                comment_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+
+            if kind == "start":
+                open_ranges[comment_id] = (p_idx, offset)
+                continue
+
+            start = open_ranges.pop(comment_id, None)
+            if start is None:
+                continue  # commentRangeEnd with no matching start
+
+            start_para, start_offset = start
+            if start_para == p_idx:
+                anchored = text[start_offset:offset]
+                spans = False
+            else:
+                parts = [para_texts[start_para][start_offset:]]
+                parts.extend(para_texts[start_para + 1:p_idx])
+                parts.append(text[:offset])
+                anchored = "\n".join(parts)
+                spans = True
+
+            info = metadata.get(comment_id, {})
+            by_para.setdefault(start_para, []).append({
+                "comment_id": str(comment_id),
+                "author": info.get("author", ""),
+                "date": info.get("date", ""),
+                "content": info.get("content", ""),
+                "anchored_text": anchored,
+                "spans_paragraphs": spans,
+            })
+
+    return by_para
+
+
 def inspect_document(doc, paragraph_index=None):
+    """Return per-paragraph structure including formatting and comments.
+
+    Each entry contains the paragraph ``index``, ``para_id``, effective
+    ``text``, ``runs``, and ``revisions`` counts. A ``comments`` list is added
+    when the paragraph anchors one or more comments; each annotation carries
+    ``comment_id``, ``author``, ``date``, ``content``, ``anchored_text``, and
+    ``spans_paragraphs``. For a range within a single paragraph,
+    ``anchored_text`` is a substring of ``text`` (deleted text is excluded).
+    When the range continues into a later paragraph it is attached to the
+    paragraph where it starts and ``spans_paragraphs`` is True, in which case
+    ``anchored_text`` is the newline-joined text spanning those paragraphs.
+    """
     body = _find_body(doc)
+    comments_by_para = _collect_paragraph_comments(body, _comment_metadata(doc))
     results = []
     for idx, p in enumerate(body.iterchildren(_ns("p"))):
         if paragraph_index is not None and idx != paragraph_index:
@@ -451,7 +593,7 @@ def inspect_document(doc, paragraph_index=None):
                 "formatting": fmt,
             })
 
-        results.append({
+        entry = {
             "index": idx,
             "para_id": p.get(_ns("paraId"), ""),
             "text": _get_effective_text(p),
@@ -460,7 +602,11 @@ def inspect_document(doc, paragraph_index=None):
                 "insertions": len(list(p.iterchildren(_ns("ins")))),
                 "deletions": len(list(p.iterchildren(_ns("del")))),
             },
-        })
+        }
+        annotations = comments_by_para.get(idx)
+        if annotations:
+            entry["comments"] = annotations
+        results.append(entry)
 
     return results
 

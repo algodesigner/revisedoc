@@ -10,6 +10,7 @@ with the same care a human reviewer would.
 
 - **Tracked-changes replace** — Replace text using Word-compatible `<w:del>` / `<w:ins>` markup
 - **Inline comments** — Anchor comments to any text range
+- **Comment extraction** — Read existing sidebar comments back, each linked to the exact text it annotates
 - **Revision inspection** — List all tracked changes with id, author, date, type, text
 - **Revision restoration** — Undo a specific tracked change
 - **MCP server** — Expose all operations as structured tools for AI agents (opencode, Claude Code, etc.)
@@ -146,9 +147,42 @@ Add to `.claude/settings.json`:
 |---|---|
 | `docx_replace` | Replace text with tracked changes |
 | `docx_comment` | Add a comment anchored to text |
+| `docx_inspect` | Inspect paragraph structure, formatting, revisions, and anchored comments |
+| `docx_search` | Locate exact text and its run offsets before editing |
 | `docx_list_revisions` | List all tracked changes |
 | `docx_restore` | Undo a revision by ID |
 | `docx_get_text` | Print document plain text |
+
+### Reading comments
+
+`docx_inspect` (and the `inspect_document` Python function) surfaces sidebar
+comments per paragraph. Each comment is linked to the text it annotates:
+
+```json
+{
+  "index": 0,
+  "para_id": "1A2B3C4D",
+  "text": "This is the clause that needs review.",
+  "runs": [ ... ],
+  "revisions": { "insertions": 0, "deletions": 0 },
+  "comments": [
+    {
+      "comment_id": "0",
+      "author": "John Doe",
+      "date": "2024-08-28T10:00:00Z",
+      "content": "Please verify the liability limits here.",
+      "anchored_text": "the clause that needs review",
+      "spans_paragraphs": false
+    }
+  ]
+}
+```
+
+For a comment whose range stays within one paragraph, `anchored_text` is a
+substring of the paragraph `text` (deleted text is excluded). When a comment's
+range continues into a later paragraph, it is attached to the paragraph where
+it starts, `spans_paragraphs` is `true`, and `anchored_text` is the
+newline-joined text spanning those paragraphs.
 
 ## Development
 

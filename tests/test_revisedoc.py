@@ -355,6 +355,207 @@ def test_inspect_document_revisions(revised_doc):
     assert total_del >= 1
 
 
+# ─── Core: inspect_document — comments ───────────────────────────────────────
+
+
+def _marker(tag, comment_id):
+    el = etree.Element(_ns(tag))
+    el.set(_ns("id"), str(comment_id))
+    return el
+
+
+def test_inspect_comments_absent_by_default(simple_doc):
+    doc = Document(str(simple_doc))
+    info = inspect_document(doc)
+    assert all("comments" not in entry for entry in info)
+
+
+def test_inspect_comments_single_paragraph():
+    doc = Document()
+    p = doc.add_paragraph()
+    p.add_run("Hello ")
+    p.add_run("world foo bar")
+    doc.add_comment(p.runs[1], "check this", author="Jane")
+
+    info = inspect_document(doc)
+    comments = info[0]["comments"]
+    assert len(comments) == 1
+    c = comments[0]
+    assert c["comment_id"] == "0"
+    assert c["author"] == "Jane"
+    assert c["content"] == "check this"
+    assert c["anchored_text"] == "world foo bar"
+    assert c["spans_paragraphs"] is False
+    # anchored_text is always a substring of the paragraph text
+    assert c["anchored_text"] in info[0]["text"]
+
+
+def test_inspect_comments_multiple_in_paragraph():
+    doc = Document()
+    p = doc.add_paragraph()
+    run_a = p.add_run("alpha ")
+    p.add_run("beta ")
+    run_c = p.add_run("gamma")
+    doc.add_comment(run_a, "first", author="A")
+    doc.add_comment(run_c, "second", author="B")
+
+    info = inspect_document(doc)
+    comments = info[0]["comments"]
+    assert len(comments) == 2
+    assert [c["anchored_text"] for c in comments] == ["alpha ", "gamma"]
+    assert [c["author"] for c in comments] == ["A", "B"]
+
+
+def test_inspect_comments_spans_paragraphs():
+    doc = Document()
+    p1 = doc.add_paragraph()
+    p1.add_run("First part")
+    p2 = doc.add_paragraph()
+    p2.add_run("second part")
+    doc.add_comment([p1.runs[0], p2.runs[0]], "crosses paragraphs", author="A")
+
+    info = inspect_document(doc)
+    assert "comments" in info[0]
+    c = info[0]["comments"][0]
+    assert c["spans_paragraphs"] is True
+    assert c["anchored_text"] == "First part\nsecond part"
+    # attached to the paragraph where the range starts, not the one it ends in
+    assert "comments" not in info[1]
+
+
+def test_inspect_comments_overlapping_ranges():
+    """Overlapping (non-nested) ranges must both resolve correctly."""
+    doc = Document()
+    doc.comments.add_comment("outer", author="A")
+    doc.comments.add_comment("inner", author="B")
+    p = doc.add_paragraph()
+    p.add_run("abc")
+    p.add_run("def")
+    r1 = p.runs[0]._element
+    r2 = p.runs[1]._element
+    r1.addprevious(_marker("commentRangeStart", 0))
+    r2.addprevious(_marker("commentRangeStart", 1))
+    end0 = _marker("commentRangeEnd", 0)
+    r2.addnext(end0)
+    end0.addnext(_marker("commentRangeEnd", 1))
+
+    info = inspect_document(doc)
+    comments = info[0]["comments"]
+    assert len(comments) == 2
+    by_id = {c["comment_id"]: c for c in comments}
+    assert by_id["0"]["anchored_text"] == "abcdef"
+    assert by_id["1"]["anchored_text"] == "def"
+
+
+def test_inspect_comments_excludes_deleted_text():
+    doc = Document()
+    doc.comments.add_comment("note", author="A")
+    p = doc.add_paragraph()
+    p.add_run("keep ")
+    del_el = etree.SubElement(p._element, _ns("del"))
+    r_del = etree.SubElement(del_el, _ns("r"))
+    etree.SubElement(r_del, _ns("delText")).text = "gone"
+    p.add_run(" here")
+    p.runs[0]._element.addprevious(_marker("commentRangeStart", 0))
+    p.runs[-1]._element.addnext(_marker("commentRangeEnd", 0))
+
+    info = inspect_document(doc)
+    c = info[0]["comments"][0]
+    assert c["anchored_text"] == "keep  here"
+    assert "gone" not in c["anchored_text"]
+    assert c["anchored_text"] == info[0]["text"]
+
+
+def test_inspect_comments_does_not_mutate_document():
+    """Inspecting a comment-free document must not add a comments part."""
+    doc = Document()
+    doc.add_paragraph("Hello world, no comments here.")
+    before = [str(p.partname) for p in doc.part.package.parts]
+
+    inspect_document(doc)
+
+    after = [str(p.partname) for p in doc.part.package.parts]
+    assert after == before
+    assert not any("comments" in name for name in after)
+
+
+def test_inspect_comments_markers_nested_in_ins():
+    """A comment range nested inside w:ins (comment on a tracked insertion)."""
+    doc = Document()
+    doc.comments.add_comment("comment on an insertion", author="A")
+    p = doc.add_paragraph()
+    ins = etree.SubElement(p._element, _ns("ins"))
+    start = etree.SubElement(ins, _ns("commentRangeStart"))
+    start.set(_ns("id"), "0")
+    r = etree.SubElement(ins, _ns("r"))
+    etree.SubElement(r, _ns("t")).text = "inserted text"
+    end = etree.SubElement(ins, _ns("commentRangeEnd"))
+    end.set(_ns("id"), "0")
+
+    info = inspect_document(doc)
+    assert info[0]["text"] == "inserted text"
+    c = info[0]["comments"][0]
+    assert c["author"] == "A"
+    assert c["anchored_text"] == "inserted text"
+
+
+def test_inspect_text_ignores_nested_ins():
+    """Runs inside a nested w:ins are not counted as paragraph text."""
+    doc = Document()
+    p = doc.add_paragraph()
+    p.add_run("outer ")
+    outer = etree.SubElement(p._element, _ns("ins"))
+    r1 = etree.SubElement(outer, _ns("r"))
+    etree.SubElement(r1, _ns("t")).text = "inserted"
+    inner = etree.SubElement(outer, _ns("ins"))
+    r2 = etree.SubElement(inner, _ns("r"))
+    etree.SubElement(r2, _ns("t")).text = "nested"
+
+    info = inspect_document(doc)
+    assert info[0]["text"] == "outer inserted"
+
+
+def test_inspect_comments_orphan_end_marker():
+    """A commentRangeEnd with no matching start must not crash."""
+    doc = Document()
+    p = doc.add_paragraph("hello world")
+    p.runs[0]._element.addnext(_marker("commentRangeEnd", 7))
+
+    info = inspect_document(doc)
+    assert "comments" not in info[0]
+
+
+def test_inspect_comments_orphan_metadata():
+    """A comment with no range markers must not crash or attach anywhere."""
+    doc = Document()
+    doc.comments.add_comment("orphaned", author="A")
+    doc.add_paragraph("plain text")
+
+    info = inspect_document(doc)
+    assert all("comments" not in entry for entry in info)
+
+
+def test_inspect_comments_round_trip(tmp_path):
+    """A comment written by revisedoc can be read back with its anchor."""
+    doc = Document()
+    p = doc.add_paragraph()
+    p.add_run("Hello ")
+    p.add_run("foo")
+    p.add_run(" bar")
+    add_comment(doc, "foo", "note", author="Bot")
+    pending = doc.part._pending_comments
+    out = tmp_path / "out.docx"
+    doc.save(str(out))
+    finalize_comments(str(out), pending_comments=pending)
+
+    reloaded = Document(str(out))
+    info = inspect_document(reloaded)
+    c = info[0]["comments"][0]
+    assert c["author"] == "Bot"
+    assert c["content"] == "note"
+    assert c["anchored_text"] == "foo"
+
+
 # ─── Core: search_text ───────────────────────────────────────────────────────
 
 
@@ -765,6 +966,48 @@ def test_mcp_server_call_inspect(simple_doc):
         assert len(data) == 2
         assert data[0]["index"] == 0
         assert "Hello" in data[0]["text"]
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_mcp_server_inspect_reports_comments(tmp_path):
+    src = tmp_path / "commented.docx"
+    doc = Document()
+    p = doc.add_paragraph()
+    p.add_run("Hello ")
+    p.add_run("world foo bar")
+    doc.add_comment(p.runs[1], "check this", author="Jane")
+    doc.save(str(src))
+
+    proc = subprocess.Popen(
+        ["revisedoc-mcp"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        _mcp_init(proc)
+
+        req = json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {
+                "name": "docx_inspect",
+                "arguments": {"input_path": str(src)},
+            },
+        })
+        proc.stdin.write(req.encode() + b"\n")
+        proc.stdin.flush()
+
+        line = proc.stdout.readline()
+        result = json.loads(line)
+        content = result["result"]["content"]
+        text = "".join(c["text"] for c in content if c["type"] == "text")
+        data = json.loads(text)
+        comments = data[0]["comments"]
+        assert comments[0]["author"] == "Jane"
+        assert comments[0]["content"] == "check this"
+        assert comments[0]["anchored_text"] == "world foo bar"
     finally:
         proc.kill()
         proc.wait()

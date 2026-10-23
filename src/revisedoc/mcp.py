@@ -97,7 +97,7 @@ def docx_get_text(
     return get_full_text(doc)
 
 
-@server.tool(description="""Inspect the structure of a .docx file. Returns every paragraph with its index, paraId, effective text, run-level formatting (bold/italic/underline), and revision counts. Optionally pass a paragraph_index to inspect a single paragraph in detail. Use this BEFORE editing to understand the document structure and formatting.""")
+@server.tool(description="""Inspect the structure of a .docx file. Returns every paragraph with its index, paraId, effective text, run-level formatting (bold/italic/underline), revision counts, and any sidebar comments anchored to it. Each comment entry includes comment_id, author, date, content, anchored_text (the text the comment refers to; for a range within one paragraph this is a substring of the paragraph text), and spans_paragraphs (true when the comment range continues into a later paragraph, in which case anchored_text is the newline-joined text spanning those paragraphs). Use this BEFORE editing to understand the document structure, formatting, and reviewer comments.""")
 def docx_inspect(
     input_path: str,
     paragraph_index: int | None = None,
